@@ -14,6 +14,10 @@ def create_app():
     CORS(app)
 
     db.init_app(app)
+
+    # Register database models
+    from app.models import Company, User, Document
+
     migrate.init_app(app, db)
 
     @app.route("/")
@@ -26,7 +30,7 @@ def create_app():
     def health():
         return jsonify({
             "status": "healthy",
-            "application": "AI Document Intelligence"
+            "database": "configured"
         })
 
     return app
