@@ -1,8 +1,9 @@
+
 from flask import Flask, jsonify
 from flask_cors import CORS
 
 from app.config import Config
-from app.extensions import db, migrate
+from app.extensions import db, migrate, jwt
 
 
 def create_app():
@@ -14,11 +15,14 @@ def create_app():
     CORS(app)
 
     db.init_app(app)
+    jwt.init_app(app)
 
-    # Register database models
     from app.models import Company, User, Document
 
     migrate.init_app(app, db)
+
+    from app.routes.auth import auth_bp
+    app.register_blueprint(auth_bp)
 
     @app.route("/")
     def home():
@@ -29,8 +33,7 @@ def create_app():
     @app.route("/api/health")
     def health():
         return jsonify({
-            "status": "healthy",
-            "database": "configured"
+            "status": "healthy"
         })
 
     return app
