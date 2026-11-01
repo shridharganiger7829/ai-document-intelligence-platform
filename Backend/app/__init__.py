@@ -25,12 +25,14 @@ def create_app():
     from app.routes.dashboard import dashboard_bp
     from app.routes.users import users_bp
     from app.routes.documents import documents_bp
+    from app.routes.processing import processing_bp
 
     # Register API blueprints
     app.register_blueprint(auth_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(users_bp)
     app.register_blueprint(documents_bp)
+    app.register_blueprint(processing_bp)
 
     @app.route("/")
     def home():
@@ -45,4 +47,3 @@ def create_app():
         })
 
     return app
-

@@ -16,9 +16,18 @@ class Config:
 
     JWT_ACCESS_TOKEN_EXPIRES = 60 * 60
 
-    # Document storage
     UPLOAD_FOLDER = os.path.abspath(
         os.path.join(BASE_DIR, "..", "uploads")
     )
 
-    MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16 MB
+    MAX_CONTENT_LENGTH = 16 * 1024 * 1024
+
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+    GROQ_MODEL = os.getenv(
+        "GROQ_MODEL",
+        "openai/gpt-oss-120b"
+    )
+    GROQ_VISION_MODEL = os.getenv(
+        "GROQ_VISION_MODEL",
+        "qwen/qwen3.8-27b"
+    )
