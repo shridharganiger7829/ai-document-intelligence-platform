@@ -18,17 +18,19 @@ def create_app():
     # Import database models
     from app.models import Company, User, Document
 
-    # Initialize database migrations
     migrate.init_app(app, db)
 
-    # Import and register API blueprints
+    # Import API blueprints
     from app.routes.auth import auth_bp
     from app.routes.dashboard import dashboard_bp
     from app.routes.users import users_bp
+    from app.routes.documents import documents_bp
 
+    # Register API blueprints
     app.register_blueprint(auth_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(users_bp)
+    app.register_blueprint(documents_bp)
 
     @app.route("/")
     def home():
@@ -43,3 +45,4 @@ def create_app():
         })
 
     return app
+
