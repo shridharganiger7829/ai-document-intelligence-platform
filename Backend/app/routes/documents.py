@@ -469,3 +469,103 @@ def submit_document_review(document_id):
         "decision": decision,
         "status": document.status
     }), 200
+
+@documents_bp.route("/pending-reviews", methods=["GET"])
+@role_required("admin")
+def get_pending_reviews():
+
+    company_id = get_jwt().get("company_id")
+
+    documents = Document.query.filter_by(
+        company_id=company_id,
+        status="review_submitted"
+    ).order_by(Document.updated_at.desc()).all()
+
+    result = []
+
+    for document in documents:
+        result.append({
+            "document_id": document.id,
+            "filename": document.original_filename,
+            "document_type": document.document_type,
+            "status": document.status,
+            "uploaded_by": document.uploader.name if document.uploader else None,
+            "reviewer": document.reviewer.name if document.reviewer else None,
+            "extracted_data": document.extracted_data,
+            "reviewer_result": document.verification_result,
+            "created_at": document.created_at.isoformat() if document.created_at else None
+        })
+
+    return jsonify({
+        "total": len(result),
+        "documents": result
+    }), 200
+
+@documents_bp.route("/<int:document_id>/admin-decision", methods=["PATCH"])
+@role_required("admin")
+def admin_document_decision(document_id):
+
+    company_id = get_jwt().get("company_id")
+
+    data = request.get_json(silent=True) or {}
+
+    decision = data.get("decision")
+    comments = data.get("comments", "")
+
+    if decision not in ["approved", "rejected"]:
+        return jsonify({
+            "message": "Decision must be approved or rejected"
+        }), 400
+
+    if not isinstance(comments, str):
+        return jsonify({
+            "message": "Comments must be text"
+        }), 400
+
+    document = Document.query.filter_by(
+        id=document_id,
+        company_id=company_id
+    ).first()
+
+    if not document:
+        return jsonify({
+            "message": "Document not found"
+        }), 404
+
+    if document.status != "review_submitted":
+        return jsonify({
+            "message": "Document is not waiting for Admin review",
+            "current_status": document.status
+        }), 400
+
+    if not document.verification_result:
+        return jsonify({
+            "message": "Reviewer submission not found"
+        }), 400
+
+    # Preserve reviewer findings and add Admin's final decision
+    verification_result = dict(document.verification_result)
+
+    verification_result["admin_decision"] = {
+        "decision": decision,
+        "comments": comments,
+        "decided_at": datetime.now(timezone.utc).isoformat()
+    }
+
+    document.verification_result = verification_result
+    document.status = decision
+
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        return jsonify({
+            "message": "Failed to save Admin decision"
+        }), 500
+
+    return jsonify({
+        "message": f"Document {decision} successfully",
+        "document_id": document.id,
+        "status": document.status,
+        "admin_decision": decision
+    }), 200
