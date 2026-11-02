@@ -2,7 +2,7 @@
 import os
 import base64
 
-import fitz
+import pymupdf
 from groq import Groq
 from flask import current_app
 
@@ -30,7 +30,7 @@ def extract_scanned_page(client, page):
 
     # Render PDF page as an image in memory
     pixmap = page.get_pixmap(
-        matrix=fitz.Matrix(1.5, 1.5),
+        matrix=pymupdf.Matrix(1.5, 1.5),
         alpha=False
     )
 
@@ -96,7 +96,7 @@ def extract_text_from_pdf(file_path):
     extracted_pages = []
 
     try:
-        pdf_document = fitz.open(file_path)
+        pdf_document = pymupdf.open(file_path)
 
         if pdf_document.page_count == 0:
             raise ValueError("PDF contains no pages")

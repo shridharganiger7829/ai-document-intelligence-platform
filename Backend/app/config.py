@@ -20,7 +20,14 @@ class Config:
         os.path.join(BASE_DIR, "..", "uploads")
     )
 
-    MAX_CONTENT_LENGTH = 16 * 1024 * 1024
+    # Maximum total size of one HTTP request
+    MAX_CONTENT_LENGTH = 100 * 1024 * 1024
+
+    # Individual PDF size limit
+    MAX_UPLOAD_FILE_SIZE = 16 * 1024 * 1024
+
+    # Maximum files accepted in one bulk upload
+    MAX_BULK_FILES = 10
 
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")
     GROQ_MODEL = os.getenv(
