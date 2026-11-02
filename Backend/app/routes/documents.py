@@ -8,8 +8,9 @@ from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge
 
 from app.extensions import db
-from app.models import Document
+from app.models import Document,User
 from app.utils.auth_decorators import role_required
+from datetime import datetime, timezone
 
 
 documents_bp = Blueprint(
@@ -279,3 +280,192 @@ def handle_file_too_large(error):
     return jsonify({
         "message": "Request exceeds the 100 MB total upload limit"
     }), 413
+
+
+
+@documents_bp.route("/<int:document_id>/review", methods=["GET"])
+@role_required("reviewer")
+def get_document_for_review(document_id):
+
+    current_user_id = int(get_jwt_identity())
+    claims = get_jwt()
+    company_id = claims.get("company_id")
+
+    document = Document.query.filter_by(
+        id=document_id,
+        company_id=company_id,
+        assigned_reviewer=current_user_id
+    ).first()
+
+    if not document:
+        return jsonify({
+            "message": "Document not found or not assigned to you"
+        }), 404
+
+    if document.status not in ["extracted", "review_submitted"]:
+        return jsonify({
+            "message": "Document is not ready for review",
+            "current_status": document.status
+        }), 400
+
+    extracted_data = document.extracted_data or {}
+
+    return jsonify({
+        "document": {
+            "id": document.id,
+            "filename": document.original_filename,
+            "document_type": document.document_type,
+            "status": document.status,
+            "file_size": document.file_size,
+            "uploaded_at": (
+                document.created_at.isoformat()
+                if document.created_at else None
+            )
+        },
+        "extraction": extracted_data,
+        "previous_review": document.verification_result
+    }), 200
+
+@documents_bp.route("/<int:document_id>/assign-reviewer", methods=["PATCH"])
+@role_required("admin")
+def assign_reviewer(document_id):
+
+    claims = get_jwt()
+    company_id = claims.get("company_id")
+
+    data = request.get_json(silent=True) or {}
+    reviewer_id = data.get("reviewer_id")
+
+    # Validate reviewer ID
+    if not isinstance(reviewer_id, int) or isinstance(reviewer_id, bool):
+        return jsonify({
+            "message": "A valid reviewer_id is required"
+        }), 400
+
+    # Find document within the Admin's company
+    document = Document.query.filter_by(
+        id=document_id,
+        company_id=company_id
+    ).first()
+
+    if not document:
+        return jsonify({
+            "message": "Document not found"
+        }), 404
+
+    # Find an active reviewer in the same company
+    reviewer = User.query.filter_by(
+        id=reviewer_id,
+        company_id=company_id,
+        role="reviewer",
+        is_active=True
+    ).first()
+
+    if not reviewer:
+        return jsonify({
+            "message": "Reviewer not found, inactive, or does not belong to your company"
+        }), 404
+
+    # Assign reviewer
+    document.assigned_reviewer = reviewer.id
+
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        return jsonify({
+            "message": "Failed to assign reviewer"
+        }), 500
+
+    return jsonify({
+        "message": "Reviewer assigned successfully",
+        "document_id": document.id,
+        "reviewer_id": reviewer.id,
+        "reviewer_name": reviewer.name,
+        "document_status": document.status
+    }), 200
+
+@documents_bp.route("/<int:document_id>/review", methods=["POST"])
+@role_required("reviewer")
+def submit_document_review(document_id):
+
+    claims = get_jwt()
+    company_id = claims.get("company_id")
+    reviewer_id = int(get_jwt_identity())
+
+    data = request.get_json(silent=True) or {}
+
+    decision = data.get("decision")
+    comments = data.get("comments", "")
+    findings = data.get("findings", [])
+    corrected_data = data.get("corrected_data")
+
+    # Validate decision
+    allowed_decisions = [
+        "verified",
+        "corrections_requested",
+        "flagged_for_admin"
+    ]
+
+    if decision not in allowed_decisions:
+        return jsonify({
+            "message": "Invalid decision",
+            "allowed_decisions": allowed_decisions
+        }), 400
+
+    if not isinstance(comments, str):
+        return jsonify({"message": "Comments must be text"}), 400
+
+    if not isinstance(findings, list):
+        return jsonify({"message": "Findings must be a list"}), 400
+
+    if corrected_data is not None and not isinstance(corrected_data, dict):
+        return jsonify({
+            "message": "corrected_data must be a JSON object"
+        }), 400
+
+    # Find document assigned to this reviewer
+    document = Document.query.filter_by(
+        id=document_id,
+        company_id=company_id,
+        assigned_reviewer=reviewer_id
+    ).first()
+
+    if not document:
+        return jsonify({
+            "message": "Document not found or not assigned to you"
+        }), 404
+
+    if document.status not in ["extracted", "review_submitted"]:
+        return jsonify({
+            "message": "Document is not ready for review",
+            "current_status": document.status
+        }), 400
+
+    # Save reviewer findings separately from AI extraction
+    document.verification_result = {
+        "reviewer_id": reviewer_id,
+        "decision": decision,
+        "comments": comments,
+        "findings": findings,
+        "corrected_data": corrected_data,
+        "submitted_at": datetime.now(timezone.utc).isoformat()
+    }
+
+    # Send to Admin for final decision
+    document.status = "review_submitted"
+
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        return jsonify({
+            "message": "Failed to submit review"
+        }), 500
+
+    return jsonify({
+        "message": "Review submitted successfully",
+        "document_id": document.id,
+        "decision": decision,
+        "status": document.status
+    }), 200
