@@ -1,6 +1,7 @@
 
 import os
 
+
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import get_jwt, get_jwt_identity
 
@@ -140,100 +141,149 @@ def process_document(document_id):
     }), 200
 
 
-@processing_bp.route(
-    "/bulk-extract",
-    methods=["POST"]
-)
+
+@processing_bp.route("/bulk-extract", methods=["POST"])
 @role_required("admin", "reviewer")
 def bulk_extract_documents():
-
-    claims = get_jwt()
-    company_id = claims.get("company_id")
-    role = claims.get("role")
-    user_id = int(get_jwt_identity())
-
-    data = request.get_json() or {}
+    from app.tasks.document_tasks import process_document_task
+    data = request.get_json(silent=True) or {}
     document_ids = data.get("document_ids")
 
     if not isinstance(document_ids, list) or not document_ids:
         return jsonify({
-            "message": "Provide a non-empty document_ids list"
+            "message": "document_ids must be a non-empty list"
         }), 400
 
     if len(document_ids) > 10:
         return jsonify({
-            "message": "Maximum 10 documents are allowed per request"
+            "message": "Maximum 10 documents allowed per request"
         }), 400
 
     if any(
-        not isinstance(document_id, int) or isinstance(document_id, bool)
-        or document_id <= 0
-        for document_id in document_ids
+        not isinstance(doc_id, int) or isinstance(doc_id, bool) or doc_id <= 0
+        for doc_id in document_ids
     ):
         return jsonify({
             "message": "All document IDs must be positive integers"
         }), 400
 
-    # Remove duplicate IDs while preserving order
+    # Remove duplicate IDs
     document_ids = list(dict.fromkeys(document_ids))
 
+    claims = get_jwt()
+    company_id = claims.get("company_id")
+    user_role = claims.get("role")
+
+    # Fetch only documents belonging to this company
     documents = Document.query.filter(
-        Document.company_id == company_id,
-        Document.id.in_(document_ids)
+        Document.id.in_(document_ids),
+        Document.company_id == company_id
     ).all()
 
-    found_ids = {document.id for document in documents}
+    found_ids = {doc.id for doc in documents}
     missing_ids = [
-        document_id
-        for document_id in document_ids
-        if document_id not in found_ids
+        doc_id for doc_id in document_ids
+        if doc_id not in found_ids
     ]
 
     if missing_ids:
         return jsonify({
-            "message": "Some documents were not found in your company",
+            "message": "Some documents were not found",
             "missing_document_ids": missing_ids
         }), 404
 
-    # Reviewers can process only documents assigned to them
-    if role == "reviewer":
-        unauthorized_ids = [
-            document.id
-            for document in documents
-            if document.assigned_reviewer != user_id
-        ]
-
-        if unauthorized_ids:
+    # Reviewers can process only their assigned documents
+    if user_role == "reviewer":
+        if any(
+            doc.assigned_reviewer != get_jwt_identity()
+            for doc in documents
+        ):
             return jsonify({
-                "message": "You are not assigned to all selected documents",
-                "unauthorized_document_ids": unauthorized_ids
+                "message": "You can process only assigned documents"
             }), 403
 
-    # Process documents in the requested order
-    document_map = {
-        document.id: document
-        for document in documents
-    }
+    queued_tasks = []
+    failed_tasks = []
 
-    results = []
+    for document in documents:
 
-    for document_id in document_ids:
-        document = document_map[document_id]
+        try:
+            # Mark document as queued before sending the task
+            document.status = "queued"
+            db.session.commit()
 
-        result = process_one_document(document)
-        results.append(result)
+            # Send document to Celery
+            task = process_document_task.delay(
+                document.id,
+                company_id
+            )
 
-    successful = sum(
-        1 for result in results
-        if result["status"] == "extracted"
-    )
+            queued_tasks.append({
+                "document_id": document.id,
+                "task_id": task.id,
+                "status": "queued"
+            })
 
-    failed = len(results) - successful
+        except Exception as error:
+            db.session.rollback()
+
+            failed_tasks.append({
+                "document_id": document.id,
+                "status": "queue_failed",
+                "message": str(error)
+            })
 
     return jsonify({
-        "message": "Bulk document processing completed",
-        "total_documents": len(results),
-        "successful": successful,
-        "failed": failed,
-        "results": results
+        "message": "Background processing tasks submitted",
+        "total": len(document_ids),
+        "queued": len(queued_tasks),
+        "failed": len(failed_tasks),
+        "tasks": queued_tasks,
+        "errors": failed_tasks
+    }), 202
+
+
+
+@processing_bp.route("/status/<int:document_id>", methods=["GET"])
+@role_required("admin", "reviewer", "employee")
+def get_document_processing_status(document_id):
+
+    claims = get_jwt()
+    company_id = claims.get("company_id")
+    user_role = claims.get("role")
+    current_user_id = int(get_jwt_identity())
+
+    document = Document.query.filter_by(
+        id=document_id,
+        company_id=company_id
+    ).first()
+
+    if not document:
+        return jsonify({
+            "message": "Document not found"
+        }), 404
+
+    # Employee can view only their own documents
+    if user_role == "employee":
+        if document.uploaded_by != current_user_id:
+            return jsonify({
+                "message": "You cannot access this document"
+            }), 403
+
+    # Reviewer can view only assigned documents
+    if user_role == "reviewer":
+        if document.assigned_reviewer != current_user_id:
+            return jsonify({
+                "message": "You are not assigned to this document"
+            }), 403
+
+    return jsonify({
+        "document_id": document.id,
+        "filename": document.original_filename,
+        "status": document.status,
+        "created_at": document.created_at.isoformat()
+            if document.created_at else None,
+        "updated_at": document.updated_at.isoformat()
+            if document.updated_at else None
     }), 200
+
