@@ -443,13 +443,30 @@ def submit_document_review(document_id):
         }), 400
 
     # Save reviewer findings separately from AI extraction
+    previous_result = dict(document.verification_result or {})
+
+    review_history = previous_result.get("review_history", [])
+
+    if previous_result.get("decision"):
+    review_history.append({
+        "reviewer_id": previous_result.get("reviewer_id"),
+        "decision": previous_result.get("decision"),
+        "comments": previous_result.get("comments"),
+        "findings": previous_result.get("findings"),
+        "corrected_data": previous_result.get("corrected_data"),
+        "submitted_at": previous_result.get("submitted_at"),
+        "admin_decision": previous_result.get("admin_decision"),
+        "employee_resubmission": previous_result.get("employee_resubmission")
+    })
+
     document.verification_result = {
-        "reviewer_id": reviewer_id,
-        "decision": decision,
-        "comments": comments,
-        "findings": findings,
-        "corrected_data": corrected_data,
-        "submitted_at": datetime.now(timezone.utc).isoformat()
+    "reviewer_id": reviewer_id,
+    "decision": decision,
+    "comments": comments,
+    "findings": findings,
+    "corrected_data": corrected_data,
+    "submitted_at": datetime.now(timezone.utc).isoformat(),
+    "review_history": review_history
     }
 
     # Send to Admin for final decision
@@ -512,9 +529,13 @@ def admin_document_decision(document_id):
     decision = data.get("decision")
     comments = data.get("comments", "")
 
-    if decision not in ["approved", "rejected"]:
+    if decision not in [
+    "approved",
+    "rejected",
+    "corrections_requested"
+    ]:
         return jsonify({
-            "message": "Decision must be approved or rejected"
+            "message": "Decision must be approved, rejected, or corrections_requested"
         }), 400
 
     if not isinstance(comments, str):
@@ -568,4 +589,131 @@ def admin_document_decision(document_id):
         "document_id": document.id,
         "status": document.status,
         "admin_decision": decision
+    }), 200
+
+@documents_bp.route("/<int:document_id>/tracking", methods=["GET"])
+@role_required("employee")
+def track_employee_document(document_id):
+
+    claims = get_jwt()
+    company_id = claims.get("company_id")
+    employee_id = int(get_jwt_identity())
+
+    # Employee can only access their own documents
+    document = Document.query.filter_by(
+        id=document_id,
+        company_id=company_id,
+        uploaded_by=employee_id
+    ).first()
+
+    if not document:
+        return jsonify({
+            "message": "Document not found"
+        }), 404
+
+    review = document.verification_result or {}
+
+    reviewer_feedback = None
+    admin_decision = None
+
+    if review:
+        reviewer_feedback = {
+            "decision": review.get("decision"),
+            "comments": review.get("comments"),
+            "findings": review.get("findings", []),
+            "corrected_data": review.get("corrected_data")
+        }
+
+        admin_decision = review.get("admin_decision")
+
+    return jsonify({
+        "document": {
+            "id": document.id,
+            "filename": document.original_filename,
+            "document_type": document.document_type,
+            "status": document.status,
+            "file_size": document.file_size,
+            "uploaded_at": (
+                document.created_at.isoformat()
+                if document.created_at else None
+            ),
+            "updated_at": (
+                document.updated_at.isoformat()
+                if document.updated_at else None
+            )
+        },
+        "reviewer_feedback": reviewer_feedback,
+        "admin_decision": admin_decision
+    }), 200
+
+    @documents_bp.route(
+    "/<int:document_id>/resubmit-corrections",
+    methods=["POST"]
+)
+@role_required("employee")
+def resubmit_document_corrections(document_id):
+
+    claims = get_jwt()
+    company_id = claims.get("company_id")
+    employee_id = int(get_jwt_identity())
+
+    data = request.get_json(silent=True) or {}
+
+    corrected_data = data.get("corrected_data")
+    comments = data.get("comments", "")
+
+    if not isinstance(corrected_data, dict) or not corrected_data:
+        return jsonify({
+            "message": "Corrected data must be a non-empty JSON object"
+        }), 400
+
+    if not isinstance(comments, str):
+        return jsonify({
+            "message": "Comments must be text"
+        }), 400
+
+    # Find document uploaded by this employee
+    document = Document.query.filter_by(
+        id=document_id,
+        company_id=company_id,
+        uploaded_by=employee_id
+    ).first()
+
+    if not document:
+        return jsonify({
+            "message": "Document not found"
+        }), 404
+
+    if document.status != "corrections_requested":
+        return jsonify({
+            "message": "This document is not waiting for corrections",
+            "current_status": document.status
+        }), 400
+
+    # Preserve existing reviewer and Admin feedback
+    verification_result = dict(document.verification_result or {})
+
+    verification_result["employee_resubmission"] = {
+        "corrected_data": corrected_data,
+        "comments": comments,
+        "submitted_at": datetime.now(timezone.utc).isoformat()
+    }
+
+    document.verification_result = verification_result
+
+    # Return document to reviewer
+    document.status = "extracted"
+
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        return jsonify({
+            "message": "Failed to submit corrections"
+        }), 500
+
+    return jsonify({
+        "message": "Corrections submitted successfully",
+        "document_id": document.id,
+        "status": document.status
     }), 200
