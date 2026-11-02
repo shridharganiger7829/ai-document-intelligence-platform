@@ -287,3 +287,113 @@ def get_document_processing_status(document_id):
             if document.updated_at else None
     }), 200
 
+
+
+@processing_bp.route("/bulk-status", methods=["POST"])
+@role_required("admin", "reviewer", "employee")
+def get_bulk_processing_status():
+
+    data = request.get_json(silent=True) or {}
+    document_ids = data.get("document_ids")
+
+    if not isinstance(document_ids, list) or not document_ids:
+        return jsonify({
+            "message": "document_ids must be a non-empty list"
+        }), 400
+
+    if len(document_ids) > 10:
+        return jsonify({
+            "message": "Maximum 10 document IDs allowed"
+        }), 400
+
+    if any(
+        not isinstance(doc_id, int)
+        or isinstance(doc_id, bool)
+        or doc_id <= 0
+        for doc_id in document_ids
+    ):
+        return jsonify({
+            "message": "All document IDs must be positive integers"
+        }), 400
+
+    document_ids = list(dict.fromkeys(document_ids))
+
+    claims = get_jwt()
+    company_id = claims.get("company_id")
+    user_role = claims.get("role")
+    current_user_id = int(get_jwt_identity())
+
+    query = Document.query.filter(
+        Document.id.in_(document_ids),
+        Document.company_id == company_id
+    )
+
+    if user_role == "employee":
+        query = query.filter(
+            Document.uploaded_by == current_user_id
+        )
+
+    elif user_role == "reviewer":
+        query = query.filter(
+            Document.assigned_reviewer == current_user_id
+        )
+
+    documents = query.all()
+
+    found_ids = {doc.id for doc in documents}
+    missing_ids = [
+        doc_id for doc_id in document_ids
+        if doc_id not in found_ids
+    ]
+
+    if missing_ids:
+        return jsonify({
+            "message": "Some documents were not found or are not accessible",
+            "unavailable_document_ids": missing_ids
+        }), 404
+
+    total = len(documents)
+
+    completed = sum(
+        doc.status == "extracted" for doc in documents
+    )
+
+    failed = sum(
+        doc.status == "extraction_failed" for doc in documents
+    )
+
+    processing = sum(
+        doc.status == "processing" for doc in documents
+    )
+
+    queued = sum(
+        doc.status == "queued" for doc in documents
+    )
+
+    pending = total - completed - failed - processing - queued
+
+    finished = completed + failed
+
+    progress = round((finished / total) * 100, 2) if total else 0
+
+    results = [
+        {
+            "document_id": doc.id,
+            "filename": doc.original_filename,
+            "status": doc.status
+        }
+        for doc in documents
+    ]
+
+    return jsonify({
+        "total": total,
+        "completed": completed,
+        "failed": failed,
+        "processing": processing,
+        "queued": queued,
+        "pending": pending,
+        "progress_percentage": progress,
+        "all_finished": finished == total,
+        "documents": results
+    }), 200
+
