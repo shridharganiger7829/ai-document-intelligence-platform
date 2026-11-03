@@ -1,5 +1,5 @@
 import React from 'react';
-import { NavLink } from 'react-router-dom';
+import { Link, NavLink } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import {
   LayoutDashboard,
@@ -57,8 +57,8 @@ export const Sidebar = ({ isMobileOpen, onCloseMobile }) => {
         }`}
       >
         {/* Logo and Brand Header (Sight Banking / Halo Lab inspired aesthetic) */}
-        <div className="h-20 flex items-center gap-3 px-6 border-b border-white/5">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-brand-600 to-brand-400 flex items-center justify-center shadow-glow-brand flex-shrink-0">
+        <Link to="/" className="h-20 flex items-center gap-3 px-6 border-b border-white/5 group">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-brand-600 to-brand-400 flex items-center justify-center shadow-glow-brand flex-shrink-0 group-hover:scale-105 transition-transform duration-200">
             <Sparkles className="w-5 h-5 text-white" />
           </div>
           <div className="flex flex-col">
@@ -69,7 +69,7 @@ export const Sidebar = ({ isMobileOpen, onCloseMobile }) => {
               Intelligence SaaS
             </span>
           </div>
-        </div>
+        </Link>
 
         {/* Company context pill */}
         <div className="px-5 py-3">

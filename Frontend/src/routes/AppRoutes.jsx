@@ -4,6 +4,9 @@ import { useAuth } from '../context/AuthContext';
 import ProtectedRoute from './ProtectedRoute';
 import AppLayout from '../components/layout/AppLayout';
 
+// Home Landing Page
+import Home from '../pages/Home';
+
 // Auth Pages
 import Login from '../pages/auth/Login';
 import Register from '../pages/auth/Register';
@@ -30,6 +33,10 @@ export const AppRoutes = () => {
 
   return (
     <Routes>
+      {/* Public Home Landing Page */}
+      <Route path="/" element={<Home />} />
+      <Route path="/home" element={<Home />} />
+
       {/* Public Auth Routes */}
       <Route
         path="/login"
@@ -38,18 +45,6 @@ export const AppRoutes = () => {
       <Route
         path="/register"
         element={isAuthenticated ? <Navigate to={getDashboardPath(role)} replace /> : <Register />}
-      />
-
-      {/* Root redirect */}
-      <Route
-        path="/"
-        element={
-          isAuthenticated ? (
-            <Navigate to={getDashboardPath(role)} replace />
-          ) : (
-            <Navigate to="/login" replace />
-          )
-        }
       />
 
       {/* Protected Admin Routes */}
@@ -94,11 +89,8 @@ export const AppRoutes = () => {
         <Route path="/employee/tracking" element={<DocumentTracking />} />
       </Route>
 
-      {/* Catch-all Not Found Route */}
-      <Route
-        path="*"
-        element={<Navigate to="/" replace />}
-      />
+      {/* Catch-all Route */}
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 };
