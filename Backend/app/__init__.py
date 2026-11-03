@@ -16,7 +16,7 @@ def create_app():
     jwt.init_app(app)
 
     # Import database models
-    from app.models import Company, User, Document
+    from app.models import Company, User, Document, AuditLog
 
     migrate.init_app(app, db)
 
@@ -26,6 +26,7 @@ def create_app():
     from app.routes.users import users_bp
     from app.routes.documents import documents_bp
     from app.routes.processing import processing_bp
+    from app.routes.audit_logs import audit_bp
 
     # Register API blueprints
     app.register_blueprint(auth_bp)
@@ -33,6 +34,7 @@ def create_app():
     app.register_blueprint(users_bp)
     app.register_blueprint(documents_bp)
     app.register_blueprint(processing_bp)
+    app.register_blueprint(audit_bp, url_prefix="/api/audit-logs")
 
     @app.route("/")
     def home():
