@@ -11,6 +11,7 @@ from app.extensions import db
 from app.models import Document,User
 from app.utils.auth_decorators import role_required
 from datetime import datetime, timezone
+from app.services.audit_service import log_action
 
 
 documents_bp = Blueprint(
@@ -102,12 +103,31 @@ def save_uploaded_documents(files, document_type=None):
             )
 
             db.session.add(document)
+
+            # Generate document ID before creating audit record
+            db.session.flush()
+
+            # Record document upload in audit logs
+            log_action(
+                company_id=company_id,
+                user_id=uploaded_by,
+                action="DOCUMENT_UPLOADED",
+                entity_type="Document",
+                entity_id=document.id,
+                details={
+                    "filename": document.original_filename,
+                    "document_type": document.document_type
+                }
+            )
+
             successful.append(document)
 
         except Exception:
             current_app.logger.exception(
                 "Failed to save uploaded file"
             )
+
+            db.session.rollback()
 
             failed.append({
                 "filename": metadata["original_filename"],
@@ -332,6 +352,7 @@ def assign_reviewer(document_id):
 
     claims = get_jwt()
     company_id = claims.get("company_id")
+    admin_id = int(get_jwt_identity())
 
     data = request.get_json(silent=True) or {}
     reviewer_id = data.get("reviewer_id")
@@ -342,7 +363,7 @@ def assign_reviewer(document_id):
             "message": "A valid reviewer_id is required"
         }), 400
 
-    # Find document within the Admin's company
+    # Find document within Admin's company
     document = Document.query.filter_by(
         id=document_id,
         company_id=company_id
@@ -367,12 +388,30 @@ def assign_reviewer(document_id):
         }), 404
 
     # Assign reviewer
+    previous_reviewer_id = document.assigned_reviewer
     document.assigned_reviewer = reviewer.id
 
     try:
+        # Add audit record
+        log_action(
+            company_id=company_id,
+            user_id=admin_id,
+            action="REVIEWER_ASSIGNED",
+            entity_type="Document",
+            entity_id=document.id,
+            details={
+                "previous_reviewer_id": previous_reviewer_id,
+                "new_reviewer_id": reviewer.id,
+                "reviewer_name": reviewer.name
+            }
+        )
+
         db.session.commit()
+
     except Exception:
         db.session.rollback()
+        current_app.logger.exception("Reviewer assignment failed")
+
         return jsonify({
             "message": "Failed to assign reviewer"
         }), 500
@@ -442,40 +481,67 @@ def submit_document_review(document_id):
             "current_status": document.status
         }), 400
 
-    # Save reviewer findings separately from AI extraction
+    # Preserve previous review history
     previous_result = dict(document.verification_result or {})
 
     review_history = previous_result.get("review_history", [])
 
     if previous_result.get("decision"):
-    review_history.append({
-        "reviewer_id": previous_result.get("reviewer_id"),
-        "decision": previous_result.get("decision"),
-        "comments": previous_result.get("comments"),
-        "findings": previous_result.get("findings"),
-        "corrected_data": previous_result.get("corrected_data"),
-        "submitted_at": previous_result.get("submitted_at"),
-        "admin_decision": previous_result.get("admin_decision"),
-        "employee_resubmission": previous_result.get("employee_resubmission")
-    })
+        review_history.append({
+            "reviewer_id": previous_result.get("reviewer_id"),
+            "decision": previous_result.get("decision"),
+            "comments": previous_result.get("comments"),
+            "findings": previous_result.get("findings"),
+            "corrected_data": previous_result.get("corrected_data"),
+            "submitted_at": previous_result.get("submitted_at"),
+            "admin_decision": previous_result.get("admin_decision"),
+            "employee_resubmission": previous_result.get("employee_resubmission")
+        })
 
+    # Save reviewer findings
     document.verification_result = {
-    "reviewer_id": reviewer_id,
-    "decision": decision,
-    "comments": comments,
-    "findings": findings,
-    "corrected_data": corrected_data,
-    "submitted_at": datetime.now(timezone.utc).isoformat(),
-    "review_history": review_history
+        "reviewer_id": reviewer_id,
+        "decision": decision,
+        "comments": comments,
+        "findings": findings,
+        "corrected_data": corrected_data,
+        "submitted_at": datetime.now(timezone.utc).isoformat(),
+        "review_history": review_history
     }
 
     # Send to Admin for final decision
     document.status = "review_submitted"
 
+    # Map reviewer decisions to audit actions
+    audit_actions = {
+        "verified": "DOCUMENT_VERIFIED",
+        "corrections_requested": "CORRECTIONS_REQUESTED",
+        "flagged_for_admin": "DOCUMENT_FLAGGED"
+    }
+
     try:
+        log_action(
+            company_id=company_id,
+            user_id=reviewer_id,
+            action=audit_actions[decision],
+            entity_type="Document",
+            entity_id=document.id,
+            details={
+                "decision": decision,
+                "comments": comments,
+                "findings": findings
+            }
+        )
+
         db.session.commit()
+
     except Exception:
         db.session.rollback()
+
+        current_app.logger.exception(
+            "Failed to submit reviewer decision or save audit log"
+        )
+
         return jsonify({
             "message": "Failed to submit review"
         }), 500
@@ -522,17 +588,20 @@ def get_pending_reviews():
 @role_required("admin")
 def admin_document_decision(document_id):
 
-    company_id = get_jwt().get("company_id")
+    claims = get_jwt()
+    company_id = claims.get("company_id")
+    admin_id = int(get_jwt_identity())
 
     data = request.get_json(silent=True) or {}
 
     decision = data.get("decision")
     comments = data.get("comments", "")
 
+    # Validate decision
     if decision not in [
-    "approved",
-    "rejected",
-    "corrections_requested"
+        "approved",
+        "rejected",
+        "corrections_requested"
     ]:
         return jsonify({
             "message": "Decision must be approved, rejected, or corrections_requested"
@@ -543,6 +612,7 @@ def admin_document_decision(document_id):
             "message": "Comments must be text"
         }), 400
 
+    # Find document within Admin's company
     document = Document.query.filter_by(
         id=document_id,
         company_id=company_id
@@ -576,10 +646,36 @@ def admin_document_decision(document_id):
     document.verification_result = verification_result
     document.status = decision
 
+    # Map Admin decisions to audit actions
+    audit_actions = {
+        "approved": "DOCUMENT_APPROVED",
+        "rejected": "DOCUMENT_REJECTED",
+        "corrections_requested": "ADMIN_CORRECTIONS_REQUESTED"
+    }
+
     try:
+        log_action(
+            company_id=company_id,
+            user_id=admin_id,
+            action=audit_actions[decision],
+            entity_type="Document",
+            entity_id=document.id,
+            details={
+                "decision": decision,
+                "comments": comments,
+                "reviewer_id": document.assigned_reviewer
+            }
+        )
+
         db.session.commit()
+
     except Exception:
         db.session.rollback()
+
+        current_app.logger.exception(
+            "Failed to save Admin decision or audit log"
+        )
+
         return jsonify({
             "message": "Failed to save Admin decision"
         }), 500
@@ -646,15 +742,15 @@ def track_employee_document(document_id):
         "admin_decision": admin_decision
     }), 200
 
-    @documents_bp.route(
+
+@documents_bp.route(
     "/<int:document_id>/resubmit-corrections",
     methods=["POST"]
 )
 @role_required("employee")
 def resubmit_document_corrections(document_id):
 
-    claims = get_jwt()
-    company_id = claims.get("company_id")
+    company_id = get_jwt().get("company_id")
     employee_id = int(get_jwt_identity())
 
     data = request.get_json(silent=True) or {}
@@ -662,9 +758,10 @@ def resubmit_document_corrections(document_id):
     corrected_data = data.get("corrected_data")
     comments = data.get("comments", "")
 
-    if not isinstance(corrected_data, dict) or not corrected_data:
+    # Validate corrected data
+    if not isinstance(corrected_data, dict):
         return jsonify({
-            "message": "Corrected data must be a non-empty JSON object"
+            "message": "corrected_data must be a JSON object"
         }), 400
 
     if not isinstance(comments, str):
@@ -672,7 +769,7 @@ def resubmit_document_corrections(document_id):
             "message": "Comments must be text"
         }), 400
 
-    # Find document uploaded by this employee
+    # Find document uploaded by this Employee
     document = Document.query.filter_by(
         id=document_id,
         company_id=company_id,
@@ -684,36 +781,57 @@ def resubmit_document_corrections(document_id):
             "message": "Document not found"
         }), 404
 
+    # Only allow resubmission when corrections are requested
     if document.status != "corrections_requested":
         return jsonify({
-            "message": "This document is not waiting for corrections",
+            "message": "Document is not waiting for corrections",
             "current_status": document.status
         }), 400
 
-    # Preserve existing reviewer and Admin feedback
+    # Preserve existing verification information
     verification_result = dict(document.verification_result or {})
 
     verification_result["employee_resubmission"] = {
+        "employee_id": employee_id,
         "corrected_data": corrected_data,
         "comments": comments,
-        "submitted_at": datetime.now(timezone.utc).isoformat()
+        "resubmitted_at": datetime.now(timezone.utc).isoformat()
     }
 
     document.verification_result = verification_result
 
-    # Return document to reviewer
+    # Send document back for review
     document.status = "extracted"
 
     try:
+        log_action(
+            company_id=company_id,
+            user_id=employee_id,
+            action="CORRECTIONS_RESUBMITTED",
+            entity_type="Document",
+            entity_id=document.id,
+            details={
+                "comments": comments,
+                "corrected_data": corrected_data
+            }
+        )
+
         db.session.commit()
+
     except Exception:
         db.session.rollback()
+
+        current_app.logger.exception(
+            "Failed to resubmit corrections or save audit log"
+        )
+
         return jsonify({
-            "message": "Failed to submit corrections"
+            "message": "Failed to resubmit corrections"
         }), 500
 
     return jsonify({
-        "message": "Corrections submitted successfully",
+        "message": "Corrections resubmitted successfully",
         "document_id": document.id,
         "status": document.status
     }), 200
+
