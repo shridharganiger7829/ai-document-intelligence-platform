@@ -1,18 +1,28 @@
 # Python
 venv/
+Backend/venv/
 __pycache__/
-*.pyc
-
-# Environment variables
+*.py[cod]
+*$py.class
+*.env
 .env
+.env.*
+Backend/.env
+Frontend/.env.local
 
-# Node
+# Node & Frontend
 node_modules/
+Frontend/node_modules/
 dist/
+Frontend/dist/
 
 # Uploaded documents
-backend/uploads/
+uploads/
+Backend/uploads/*.pdf
+!Backend/uploads/.gitkeep
 
-# IDE
+# IDE & OS
 .vscode/
 .idea/
+.DS_Store
+Thumbs.db

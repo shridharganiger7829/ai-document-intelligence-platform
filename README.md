@@ -77,3 +77,25 @@ npm run dev
    - **Review Verification**: Reviewers inspect PDFs, correct fields, log findings, and submit decisions
    - **Admin Approval**: Final compliance sign-off or change request
    - **Audit Logs**: Immutable activity logging with actor, target entity, IP, and payload inspection
+
+
+---
+
+## 5. Supabase Inactivity Prevention (GitHub Actions)
+
+Supabase free-tier projects automatically pause after 7 days of inactivity. To prevent this, an automated heartbeat action is included in this repository.
+
+### How It Works
+- **Cron Schedule**: Runs automatically every 3 days at `06:00 UTC` (`0 6 */3 * *`).
+- **Heartbeat Query**: Executes a lightweight PostgreSQL query (`SELECT NOW()`, database ping) against your Supabase instance to register active traffic and keep the project alive.
+- **Manual Trigger**: Can also be executed manually anytime via the GitHub Actions tab (`workflow_dispatch`).
+
+### Setup in GitHub:
+1. Open your GitHub Repository: `https://github.com/shridharganiger7829/ai-document-intelligence-platform`
+2. Go to **Settings** > **Secrets and variables** > **Actions**
+3. Click **New repository secret**
+4. Add the following secret:
+   - **Name**: `DATABASE_URL` (or `SUPABASE_DB_URL`)
+   - **Value**: Your Supabase PostgreSQL connection string (from Supabase Project Settings > Database)
+5. *(Optional)* Add `SUPABASE_URL` and `SUPABASE_ANON_KEY` if you also want HTTP REST API heartbeats.
+6. To test immediately, go to the **Actions** tab on GitHub, select **Keep Supabase Active (Heartbeat)**, and click **Run workflow**.
