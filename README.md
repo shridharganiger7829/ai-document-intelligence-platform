@@ -20,6 +20,20 @@
 
 ---
 
+## 🔑 Pre-configured Test Accounts
+
+You can test every role on the live Vercel deployment:
+
+| Role | Email | Password | Primary Workflow |
+|---|---|---|---|
+| **Admin** | `alexander@sightintel.com` | `EnterpriseSecurePassword123!` | Executive dashboard, reviewer assignment, user management, pending approvals, and audit logs |
+| **Reviewer** | `sarah.reviewer@sightintel.com` | `ReviewerPass123!` | Assigned queue, split-screen PDF preview, data correction, and review submission |
+| **Employee** | `john.employee@sightintel.com` | `EmployeePass123!` | Document upload, real-time status tracking, and correction resubmissions |
+
+*Note: You can also register a new company at [`/register`](https://ai-document-intelligence-platform-o3s1-pghxxcavy-acme-9507.vercel.app/register) to test tenant isolation.*
+
+---
+
 ## 📸 Visual Design Philosophy
 
 The user interface is inspired by **Sight Banking / Modern Webflow SaaS**:
@@ -274,20 +288,6 @@ npm install
 npm run dev
 ```
 > Frontend runs at `http://localhost:5173`
-
----
-
-## 🔑 Pre-configured Test Accounts
-
-You can test every role on the live Vercel deployment:
-
-| Role | Email | Password | Primary Workflow |
-|---|---|---|---|
-| **Admin** | `alexander@sightintel.com` | `EnterpriseSecurePassword123!` | Executive dashboard, reviewer assignment, user management, pending approvals, and audit logs |
-| **Reviewer** | `sarah.reviewer@sightintel.com` | `ReviewerPass123!` | Assigned queue, split-screen PDF preview, data correction, and review submission |
-| **Employee** | `john.employee@sightintel.com` | `EmployeePass123!` | Document upload, real-time status tracking, and correction resubmissions |
-
-*Note: You can also register a new company at [`/register`](https://ai-document-intelligence-platform-o3s1-pghxxcavy-acme-9507.vercel.app/register) to test tenant isolation.*
 
 ---
 
