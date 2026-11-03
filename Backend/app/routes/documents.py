@@ -12,7 +12,8 @@ from app.models import Document,User
 from app.utils.auth_decorators import role_required
 from datetime import datetime, timezone
 from app.services.audit_service import log_action
-
+from flask import send_file
+from pathlib import Path
 
 documents_bp = Blueprint(
     "documents",
@@ -258,23 +259,86 @@ def get_documents():
     role = claims.get("role")
     user_id = int(get_jwt_identity())
 
-    query = Document.query.filter_by(
-        company_id=company_id
-    )
+    if not company_id:
+        return jsonify({"message": "Company information missing"}), 401
 
+    # Pagination
+    try:
+        page = max(1, int(request.args.get("page", 1)))
+        per_page = min(100, max(1, int(request.args.get("per_page", 10))))
+    except ValueError:
+        return jsonify({
+            "message": "page and per_page must be valid integers"
+        }), 400
+
+    # Base company query
+    query = Document.query.filter_by(company_id=company_id)
+
+    # Role-based document visibility
     if role == "employee":
         query = query.filter_by(uploaded_by=user_id)
 
     elif role == "reviewer":
         query = query.filter_by(assigned_reviewer=user_id)
 
-    documents = query.order_by(
-        Document.created_at.desc()
-    ).all()
+    # Search by filename
+    search = request.args.get("search", "").strip()
+    if search:
+        query = query.filter(
+            Document.original_filename.ilike(f"%{search}%")
+        )
+
+    # Filter by status
+    status = request.args.get("status", "").strip()
+    if status:
+        query = query.filter(
+            Document.status == status
+        )
+
+    # Filter by document type
+    document_type = request.args.get("document_type", "").strip()
+    if document_type:
+        query = query.filter(
+            Document.document_type == document_type
+        )
+
+    # Filter by upload date
+    date_from = request.args.get("date_from")
+    date_to = request.args.get("date_to")
+
+    if date_from:
+        try:
+            from datetime import datetime
+            start_date = datetime.strptime(date_from, "%Y-%m-%d")
+            query = query.filter(Document.created_at >= start_date)
+        except ValueError:
+            return jsonify({
+                "message": "date_from must use YYYY-MM-DD format"
+            }), 400
+
+    if date_to:
+        try:
+            from datetime import datetime, timedelta
+            end_date = datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
+            query = query.filter(Document.created_at < end_date)
+        except ValueError:
+            return jsonify({
+                "message": "date_to must use YYYY-MM-DD format"
+            }), 400
+
+    # Newest documents first
+    query = query.order_by(Document.created_at.desc())
+
+    # Pagination
+    pagination = query.paginate(
+        page=page,
+        per_page=per_page,
+        error_out=False
+    )
 
     result = []
 
-    for document in documents:
+    for document in pagination.items:
         result.append({
             "id": document.id,
             "original_filename": document.original_filename,
@@ -290,9 +354,18 @@ def get_documents():
         })
 
     return jsonify({
-        "total_documents": len(result),
+        "pagination": {
+            "page": pagination.page,
+            "per_page": pagination.per_page,
+            "total_records": pagination.total,
+            "total_pages": pagination.pages,
+            "has_next": pagination.has_next,
+            "has_previous": pagination.has_prev
+        },
+        "total_documents": pagination.total,
         "documents": result
     }), 200
+
 
 
 @documents_bp.errorhandler(RequestEntityTooLarge)
@@ -835,3 +908,91 @@ def resubmit_document_corrections(document_id):
         "status": document.status
     }), 200
 
+def get_accessible_document(document_id):
+    claims = get_jwt()
+    company_id = claims.get("company_id")
+    role = claims.get("role")
+    user_id = int(get_jwt_identity())
+
+    query = Document.query.filter_by(
+        id=document_id,
+        company_id=company_id
+    )
+
+    if role == "employee":
+        query = query.filter_by(uploaded_by=user_id)
+
+    elif role == "reviewer":
+        query = query.filter_by(assigned_reviewer=user_id)
+
+    elif role != "admin":
+        return None
+
+    return query.first()
+
+@documents_bp.route("/<int:document_id>/preview", methods=["GET"])
+@role_required("admin", "employee", "reviewer")
+def preview_document(document_id):
+
+    document = get_accessible_document(document_id)
+
+    if not document:
+        return jsonify({
+            "message": "Document not found or access denied"
+        }), 404
+
+    file_path = Path(document.file_path).resolve()
+    upload_folder = Path(
+        current_app.config["UPLOAD_FOLDER"]
+    ).resolve()
+
+    # Prevent access outside the upload directory
+    if not file_path.is_relative_to(upload_folder):
+        return jsonify({
+            "message": "Invalid document storage path"
+        }), 403
+
+    if not file_path.is_file():
+        return jsonify({
+            "message": "Document file not found"
+        }), 404
+
+    return send_file(
+        file_path,
+        mimetype="application/pdf",
+        as_attachment=False,
+        download_name=document.original_filename
+    )
+
+@documents_bp.route("/<int:document_id>/download", methods=["GET"])
+@role_required("admin", "employee", "reviewer")
+def download_document(document_id):
+
+    document = get_accessible_document(document_id)
+
+    if not document:
+        return jsonify({
+            "message": "Document not found or access denied"
+        }), 404
+
+    file_path = Path(document.file_path).resolve()
+    upload_folder = Path(
+        current_app.config["UPLOAD_FOLDER"]
+    ).resolve()
+
+    if not file_path.is_relative_to(upload_folder):
+        return jsonify({
+            "message": "Invalid document storage path"
+        }), 403
+
+    if not file_path.is_file():
+        return jsonify({
+            "message": "Document file not found"
+        }), 404
+
+    return send_file(
+        file_path,
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name=document.original_filename
+    )
